@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover"
+  />
+  <title>Tela Inicial – DinoR (estilo DOOM)</title>
+  <style>
+    :root {
+      /* Espaços seguros para notch em iOS e Android modernos */
+      --inset-top: env(safe-area-inset-top, 0px);
+      --inset-right: env(safe-area-inset-right, 0px);
+      --inset-bottom: env(safe-area-inset-bottom, 0px);
+      --inset-left: env(safe-area-inset-left, 0px);
+    }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #0e0a0a;
+      color: #e6b35a;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, sans-serif;
+      overflow: hidden;
+      padding: var(--inset-top) var(--inset-right) var(--inset-bottom) var(--inset-left);
+    }
+
+    /* Fonte pixel opcional */
+    @font-face {
+      font-family: 'PixelDINOR';
+      src: url('assets/pixel-font.woff2') format('woff2');
+      font-display: swap;
+    }
+
+    #wrap {
+      display: grid;
+      place-items: center;
+      width: 100%;
+      height: 100%;
+    }
+
+    canvas {
+      /* tamanho CSS será controlado via JS para manter 16:9 */
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      border: 1px solid #2a1d1a;
+      box-shadow: 0 0 60px #000 inset, 0 0 40px rgba(255,120,20,0.1);
+      background: #090606;
+      touch-action: manipulation; /* evita delays/gestos indesejados no mobile */
+      display: block;
+      max-width: 100vw;
+      max-height: 100vh;
+    }
+
+    /* Mensagem de loading/erro */
+    #msg {
+      position: fixed;
+      left: var(--inset-left);
+      right: var(--inset-right);
+      bottom: calc(10px + var(--inset-bottom));
+      text-align: center;
+      color: #a97a3a;
+      font-size: 14px;
+      text-shadow: 0 1px 0 #000;
+      pointer-events: none;
+      padding: 0 8px;
+    }
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <!-- Tamanho lógico 1280x720. O JS faz o scaling para alta definição. -->
+    <canvas id="game" width="1280" height="720"></canvas>
+  </div>
+  <div id="msg">Use W/S ou ↑/↓ para navegar • Enter para selecionar • Toque nos itens no celular</div>
+
+  <script>
+  // ===============================
+  // Configuração base e responsividade
+  // ===============================
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  // Dimensão lógica do jogo (mantemos 16:9)
+  const LOGICAL_W = 1280;
+  const LOGICAL_H = 720;
+
+  // Estado do scaling
+  let dpr = window.devicePixelRatio || 1;
+
+  function fitCanvas() {
+    // Calcula tamanho máximo que caiba na viewport mantendo 16:9
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    const targetW = vw;
+    const targetH = Math.floor(vw * 9/16);
+
+    const cssW = (targetH <= vh) ? targetW : Math.floor(vh * 16/9);
+    const cssH = (targetH <= vh) ? targetH : vh;
+
+    // Aplica tamanho CSS (apenas estilo visual)
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+
+    // Ajusta para alta definição (Retina/Android HiDPI)
+    dpr = window.devicePixelRatio || 1;
+    canvas.width  = Math.floor(LOGICAL_W * dpr);
+    canvas.height = Math.floor(LOGICAL_H * dpr);
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0); // reseta
+    ctx.scale(dpr, dpr); // aplica escala para desenhar em coordenadas lógicas
+  }
+
+  window.addEventListener('resize', fitCanvas);
+  fitCanvas(); // primeira chamada
+
+  // Coordenadas do canvas: converte de CSS (cliente) para lógicas (1280x720)
+  function clientToCanvasLogical(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = LOGICAL_W / rect.width;
+    const scaleY = LOGICAL_H / rect.height;
+    const x = (clientX - rect.left) * scaleX;
+    const y = (clientY - rect.top)  * scaleY;
+    return { x, y };
+  }
+
+  // ===============================
+  // Tema de cores estilo DOOM
+  // ===============================
+  const COLORS = {
+    bg1: '#1a0f0f',
+    bg2: '#2b1917',
+    accent: '#e6b35a',
+    accent2: '#ff7a1a',
+    shadow: '#000000',
+    text: '#f0c06b',
+    textDim: '#b48849',
+    redDark: '#4a0f0f'
+  };
+
+  // ===============================
+  // Carregamento utilitário
+  // ===============================
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+
+  function loadAudio(src, volume=0.4) {
+    const a = new Audio(src);
+    a.preload = 'auto';
+    a.volume = volume;
+    return a;
+  }
+
+  const assets = {
+    images: {
+      bg1: 'Imagens/fundo5.png', // montanhas/longe
+      bg2: 'Imagens/fundo.png',  // rochas médias
+      bg3: 'Imagens/dino.png',   // silhuetas/arbustos (próximo)
+      logo: 'assets/logo.png'    // opcional
+    },
+    sounds: {
+      nav:   'sons/botão.mp3',
+      ok:    'sons/botão.mp3',
+      back:  'sons/botão.mp3',
+      music: 'sons/musica.mp3'
+    }
+  };
+
+  const state = {
+    loaded: false,
+    imgs: {},
+    sfx: {},
+    time: 0,
+
+    parallax: [
+      { key: 'bg1', speed: 0.06, x: 0 },
+      { key: 'bg2', speed: 0.12, x: 0 },
+      { key: 'bg3', speed: 0.24, x: 0 }
+    ],
+
+    title: 'DINOR',
+    subtitle: 'PRESS ENTER',
+
+    menu: {
+      items: ['NEW GAME', 'CREDITS', 'QUIT'],
+      idx: 0,
+      blink: 0
+    },
+
+    entering: false,
+    running: true // para pausar quando a aba estiver oculta
+  };
+
+  // ===============================
+  // Desenho de UI
+  // ===============================
+  function drawTextOutline(text, x, y, size = 100, fill = COLORS.accent, outline = COLORS.shadow, thickness = 8, align='center') {
+    ctx.save();
+    ctx.font = `900 ${size}px PixelDINOR, Impact, system-ui, sans-serif`;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = thickness;
+    ctx.strokeStyle = outline;
+    ctx.fillStyle = fill;
+    ctx.strokeText(text, x, y);
+    ctx.fillText(text, x, y);
+    ctx.restore();
+  }
+
+  function drawScanlines() {
+    const spacing = 3;
+    ctx.save();
+    ctx.globalAlpha = 0.07;
+    ctx.fillStyle = '#000';
+    for (let y = 0; y < LOGICAL_H; y += spacing) {
+      ctx.fillRect(0, y, LOGICAL_W, 1);
+    }
+    ctx.restore();
+  }
+
+  function drawVignette() {
+    const grad = ctx.createRadialGradient(LOGICAL_W/2, LOGICAL_H/2, Math.min(LOGICAL_W,LOGICAL_H)*0.2, LOGICAL_W/2, LOGICAL_H/2, Math.max(LOGICAL_W,LOGICAL_H)*0.65);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.65)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,LOGICAL_W,LOGICAL_H);
+  }
+
+  function drawParallax(dt) {
+    ctx.fillStyle = COLORS.bg1;
+    ctx.fillRect(0,0,LOGICAL_W,LOGICAL_H);
+
+    for (const layer of state.parallax) {
+      const img = state.imgs[layer.key];
+      if (!img) continue;
+      layer.x -= layer.speed * dt;
+      // loop horizontal
+      let x = (layer.x % img.width);
+      if (x > 0) x -= img.width;
+      for (let drawX = x; drawX < LOGICAL_W; drawX += img.width) {
+        ctx.drawImage(img, drawX, 0, img.width, LOGICAL_H);
+      }
+    }
+  }
+
+  function drawTitle() {
+    const logoImg = state.imgs['logo'];
+    if (logoImg) {
+      const targetW = Math.min(LOGICAL_W*0.75, logoImg.width);
+      const ratio = targetW / logoImg.width;
+      const targetH = logoImg.height * ratio;
+      const x = (LOGICAL_W - targetW)/2;
+      const y = LOGICAL_H*0.12;
+      // sombra
+      ctx.globalAlpha = 0.8;
+      ctx.drawImage(logoImg, x+8, y+10, targetW, targetH);
+      ctx.globalAlpha = 1;
+      ctx.drawImage(logoImg, x, y, targetW, targetH);
+    } else {
+      drawTextOutline(state.title, LOGICAL_W/2, LOGICAL_H*0.2, Math.floor(LOGICAL_H*0.14), COLORS.accent2, '#000', 18, 'center');
+    }
+  }
+
+  function drawMenu(dt) {
+    const baseY = LOGICAL_H*0.56;
+    const line = Math.floor(LOGICAL_H*0.075);
+    state.menu.blink += dt * 0.009;
+
+    for (let i=0; i<state.menu.items.length; i++) {
+      const isSel = i === state.menu.idx;
+      const y = baseY + i*line;
+      const pulse = isSel ? (Math.sin(state.menu.blink)*0.1 + 1) : 1;
+      const size = Math.floor(LOGICAL_H*0.07 * pulse);
+      const fill = isSel ? COLORS.accent2 : COLORS.text;
+      const outline = isSel ? '#000' : COLORS.shadow;
+
+      drawTextOutline(state.menu.items[i], LOGICAL_W/2, y, size, fill, outline, 10, 'center');
+
+      // cursor tipo “>” esquerdo
+      if (isSel) {
+        ctx.save();
+        ctx.fillStyle = fill;
+        ctx.font = `900 ${Math.floor(size*0.6)}px PixelDINOR, Impact, sans-serif`;
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        // posição aproximada do cursor
+        ctx.fillText('▶', LOGICAL_W/2 - Math.max(ctx.measureText(state.menu.items[i]).width*0.55, 240), y);
+        ctx.restore();
+      }
+    }
+
+    // dica “PRESS ENTER” piscando
+    const alpha = 0.5 + 0.5 * Math.sin(state.time*0.003);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = COLORS.textDim;
+    ctx.font = `700 ${Math.floor(LOGICAL_H*0.04)}px PixelDINOR, Impact, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('PRESS ENTER', LOGICAL_W/2, LOGICAL_H*0.95);
+    ctx.restore();
+  }
+
+  // ===============================
+  // Input (Teclado)
+  // ===============================
+  const KEYS = new Set();
+  window.addEventListener('keydown', (e) => {
+    KEYS.add(e.key.toLowerCase());
+    handleKey(e);
+  });
+  window.addEventListener('keyup', (e) => KEYS.delete(e.key.toLowerCase()));
+
+  function handleKey(e) {
+    // inicia a música no primeiro input do usuário (evita bloqueio de autoplay)
+    if (state.sfx.music && !state.sfx.musicStarted) {
+      state.sfx.musicStarted = true;
+      try { state.sfx.music.play(); } catch (err) {}
+    }
+
+    if (state.entering) return;
+    const k = e.key.toLowerCase();
+
+    const up = (k === 'w' || e.key === 'ArrowUp');
+    const down = (k === 's' || e.key === 'ArrowDown');
+    const confirm = (k === 'enter');
+    const back = (k === 'escape');
+
+    if (up) {
+      e.preventDefault();
+      state.menu.idx = (state.menu.idx - 1 + state.menu.items.length) % state.menu.items.length;
+      try { state.sfx.nav.currentTime = 0; state.sfx.nav.play(); } catch {}
+    }
+    if (down) {
+      e.preventDefault();
+      state.menu.idx = (state.menu.idx + 1) % state.menu.items.length;
+      try { state.sfx.nav.currentTime = 0; state.sfx.nav.play(); } catch {}
+    }
+    if (confirm) {
+      e.preventDefault();
+      selectItem(state.menu.idx);
+    }
+    if (back) {
+      e.preventDefault();
+      try { state.sfx.back.currentTime = 0; state.sfx.back.play(); } catch {}
+    }
+  }
+
+  // ===============================
+  // Toque/Ponteiro (Mobile + Desktop)
+  // ===============================
+  function detectarCliqueNoMenu(x, y) {
+    const baseY = LOGICAL_H * 0.56;
+    const line = Math.floor(LOGICAL_H * 0.075);
+    const baseSize = Math.floor(LOGICAL_H * 0.07);
+
+    for (let i = 0; i < state.menu.items.length; i++) {
+      const itemY = baseY + i * line;
+
+      // mesmo font-size base usado (sem pulse)
+      const size = baseSize;
+      ctx.save();
+      ctx.font = `900 ${size}px PixelDINOR, Impact, sans-serif`;
+
+      const label = state.menu.items[i];
+      const textWidth = ctx.measureText(label).width;
+
+      // Hitbox horizontal confortável
+      const marginX = 60;
+      const left   = LOGICAL_W/2 - textWidth/2 - marginX;
+      const right  = LOGICAL_W/2 + textWidth/2 + marginX;
+
+      // Hitbox vertical confortável
+      const halfHeight = size * 0.6;
+      const top    = itemY - halfHeight;
+      const bottom = itemY + halfHeight;
+      ctx.restore();
+
+      if (x >= left && x <= right && y >= top && y <= bottom) {
+        state.menu.idx = i;  // seleciona item tocado
+        selectItem(i);       // ativa imediatamente
+        return;
+      }
+    }
+  }
+
+  canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); // evita scroll/zoom e ghost click no mobile
+    const { x, y } = clientToCanvasLogical(e.clientX, e.clientY);
+    // inicia música no primeiro toque (mobile)
+    if (state.sfx.music && !state.sfx.musicStarted) {
+      state.sfx.musicStarted = true;
+      try { state.sfx.music.play(); } catch {}
+    }
+    detectarCliqueNoMenu(x, y);
+  }, { passive: false });
+
+  // ===============================
+  // Seleção de item (com fade)
+  // ===============================
+  function selectItem(idx) {
+    try { state.sfx.ok.currentTime = 0; state.sfx.ok.play(); } catch {}
+    state.entering = true;
+
+    // pequena animação de fade
+    const start = performance.now();
+    const DURATION = 600; // ms
+    function fadeStep(now) {
+      const t = Math.min(1, (now - start)/DURATION);
+      render(16);
+      ctx.save();
+      ctx.fillStyle = `rgba(0,0,0,${t})`;
+      ctx.fillRect(0,0,LOGICAL_W,LOGICAL_H);
+      ctx.restore();
+      if (t < 1) {
+        requestAnimationFrame(fadeStep);
+      } else {
+        // troca de cena (mantido do seu comportamento)
+        const selected = state.menu.items[idx];
+        if (selected === 'NEW GAME') {
+          window.location.href = "dino.html";
+        } else if (selected === 'OPTIONS') {
+          alert('Abrir Opções… (plugar tela de opções)');
+        } else if (selected === 'CREDITS') {
+          window.location.href = "dino.html";
+        } else if (selected === 'QUIT') {
+          window.location.href = "https://www.google.com";
+        }
+        state.entering = false;
+      }
+    }
+    requestAnimationFrame(fadeStep);
+  }
+
+  // ===============================
+  // Loop principal (com pausa em background)
+  // ===============================
+  let last = performance.now();
+
+  function render(dt) {
+    drawParallax(dt);
+
+    // névoa/gradiente vermelho escuro
+    const fog = ctx.createLinearGradient(0,0,0,LOGICAL_H);
+    fog.addColorStop(0, 'rgba(90,0,0,0.55)');
+    fog.addColorStop(1, 'rgba(10,0,0,0.0)');
+    ctx.fillStyle = fog;
+    ctx.fillRect(0,0,LOGICAL_W,LOGICAL_H);
+
+    drawTitle();
+    drawMenu(dt);
+    drawScanlines();
+    drawVignette();
+  }
+
+  function loop(now) {
+    if (!state.running) { requestAnimationFrame(loop); return; }
+    const dt = now - last;
+    last = now;
+    state.time += dt;
+    if (state.loaded) render(dt);
+    requestAnimationFrame(loop);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    state.running = (document.visibilityState === 'visible');
+    // opcional: pausar música quando sair da aba
+    if (!state.running && state.sfx.music && !state.sfx.music.paused) {
+      try { state.sfx.music.pause(); } catch {}
+    } else if (state.running && state.sfx.musicStarted) {
+      try { state.sfx.music.play(); } catch {}
+    }
+  });
+
+  // ===============================
+  // Boot / Carregamento de assets
+  // ===============================
+  (async function boot() {
+    try {
+      // carrega imagens
+      const keys = Object.keys(assets.images);
+      const promises = keys.map(k => loadImage(assets.images[k]).then(img => [k, img]).catch(() => [k, null]));
+      const results = await Promise.all(promises);
+      results.forEach(([k, img]) => state.imgs[k] = img);
+
+      // carrega sons
+      state.sfx.nav   = loadAudio(assets.sounds.nav, 0.5);
+      state.sfx.ok    = loadAudio(assets.sounds.ok, 0.6);
+      state.sfx.back  = loadAudio(assets.sounds.back, 0.5);
+      state.sfx.music = loadAudio(assets.sounds.music, 0.3);
+      state.sfx.music.loop = true;
+
+      state.loaded = true;
+    } catch (err) {
+      console.error('Erro ao carregar assets:', err);
+      document.getElementById('msg').textContent = 'Falha ao carregar assets. Verifique caminhos/nomes dos arquivos.';
+    } finally {
+      requestAnimationFrame(loop);
+    }
+  })();
+  </script>
+</body>
+</html>
